@@ -1,47 +1,71 @@
 {-# Language MultiParamTypeClasses #-}
 {-# Language FlexibleInstances #-}
-{-# Language UndecidableInstances #-}
 {-# Language FlexibleContexts #-}
-{-# Language AllowAmbiguousTypes #-}
 {-# Language FunctionalDependencies #-}
 {-# Language GADTs #-}
+
 module PolyFuns where
 
--- The thing is I need to make some recursive definitions...
+----------------------------------------
+  -- Poly Add
+----------------------------------------
 
--- type family Polyfun a b where
---   Polyfun a a = a
---   Polyfun (a -> a) a =
+-- | Main class 'Base'.
+class Base a r | r -> a where
+  base :: r -- ^ No argument
+  sapp :: a -> r -- ^ At least one argument
 
-class PVar a r | r -> a where
-  app :: a -> a -> r
+-- | Base for Int, zero and just identity.
+instance Base Int Int where
+  base = 0
+  sapp = id
 
-instance PVar Int Int where
-  app = (+)
+-- | Recursive call generation base on result type form.
+-- For each '->' found in the result type, this instance generates a recursive
+-- call for another Base (minus one '->')
+instance (a ~ Int, Base a r) => Base a (a -> r) where
+  base = sapp
+  sapp a b = sapp (a + b)
 
-instance PVar a a => PVar a (a -> a) where
-  app a b c = app (app a b) c
+polyAdd :: (a ~ Int, Base a r) => r
+polyAdd = base
 
-class PInt r where
-  appP :: Int -> Int -> r
+----------------------------------------
+  -- Poly List
+----------------------------------------
 
-instance PInt Int where
-  appP = (+)
+class PList a r | r -> a where
+   zeroL :: r
+   plist :: [a] -> a -> r
 
-instance (PInt r) => PInt (Int -> r) where
-  appP a b z = appP (appP a b) z
+instance PList a [a] where
+  zeroL = []
+  plist xs x = reverse $ x : xs
 
-addP :: PVar Int r => Int -> r
-addP = app 0
+-- | Pretty much the same as Base
+instance PList a r => PList a (a -> r) where
+  zeroL = plist []
+  plist xs x y = plist (x:xs) y
 
--- test :: Int
--- test = polyAdd (1 :: Int) (2 :: Int) (3 :: Int)
+-- `polyList` turns its arguments into a list, polymorphically.
+polyList :: PList a r => r
+polyList = zeroL
 
-
--- -- `polyList` turns its arguments into a list, polymorphically.
--- polyList :: ???
--- polyList = error "TODO: polyList"
-
+----------------------------------------
+  -- Poly Words
+----------------------------------------
 -- -- `polyWords` turns its arguments into a spaced string.
--- polyWords :: ???
--- polyWords = error "TODO: polyList"
+class CString a r | r -> a where
+  zeroArgs :: r
+  concat'  :: a -> r
+
+instance CString String String where
+  zeroArgs = []
+  concat'  = id
+
+instance (a ~ String, CString a r) => CString a (a -> r) where
+  zeroArgs = concat'
+  concat' w1 w2 = concat' (w1 ++ ' ' : w2)
+
+polyWords :: (a ~ [Char], CString a r) => r
+polyWords = zeroArgs
