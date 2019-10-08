@@ -174,14 +174,17 @@ false = K <#> I
 not' :: SKI (Bool' a -> Bool' a)
 not' = flip'
 
+-- \a. \b. a b false = flip' a false b
+-- \a. flip' a false = S fkip' (K false)
 and' :: SKI (Bool' (Bool' a) -> Bool' a -> Bool' a)
-and' = rev <#> true
+and' = S <#> flip' <#> (K <#> false)
 
 or' :: SKI (Bool' (Bool' a) -> Bool' a -> Bool' a)
-or' = comp <#> (rev <#> false)
+or' = rev <#> true
 
--- xor' :: SKI (Bool' (Bool' a -> Bool' a) -> Bool' a -> Bool' a)
-xor' = comp' join (S <#> tcase <#> xo)
-  where
-    tcase = comp' S (icomp <#> and')
-    xo = K <#> (comp' (icomp <#> not') or')
+
+-- \b \a -> b (not' a) a = S (b . not') I a
+-- \b -> S (o' not' b) I == S (S o (o' not')) (K I) b
+xor' :: SKI (Bool' (Bool' a -> Bool' a) -> Bool' a -> Bool' a)
+xor' = rotv <#> not' <#> I -- Solution given by @lolisa.
+-- xor' = S <#> (comp' S (icomp <#> not')) <#> (K <#> I) -- This is my humble one (which fails to type)
