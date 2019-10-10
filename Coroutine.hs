@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE LambdaCase #-}
 module Coroutine where
 
 import Control.Monad (ap, forever)
@@ -27,63 +28,122 @@ instance Monad (Coroutine r u d) where
   -- Nothing to do, just continue with x
   return x = Coroutine ($(Done x))
   -- Given f :: Coroutine r u d a
-  -- and g :: a -> Coroutine r u d b
+  -- and   g :: a -> Coroutine r u d b
   -- form a Coroutine r u d b.
-  f >>= g = Coroutine $ \k -> apply f (\a' -> case a' of
+  f >>= g = Coroutine $ \k -> apply f (\case
+                              -- | f is just a value a
                               Done a -> apply (g a) k
-                              Out _ f' -> apply (f' >>= g) k
-                              In f' -> k (In $ (>>=g) . f')
-                                      )
-  -- f >>= g  = Coroutine (\k -> apply f (\a' -> case a' of
-  --                                         Done a -> apply (g a) k
-  --                                         Out _ f' -> apply (f' >>= g) k
-  --                                         In f' -> _
-  --                                     ))
+                              -- | f gives a value back, so I just throw it to k
+                              -- and continue binding.
+                              Out d f' -> k $ Out d (f' >>= g)
+                              -- | f expects a value, so we basically delay
+                              -- binding with g until a value is given.
+                              In f' -> k (In $ (>>=g) . f'))
 
+{-
+The semantics of x >>> y are as follows:
+We start by executing y normally until y requests additional input (by the In
+constructor). At this point we transfer control to x which executes normally
+until it attempts to output (by the Out constructor) at which point we resume
+computation of y; the value that x produced in its output is used as y's input.
+If either x or y terminate with the value v then v is the value of the whole
+pipe.
+-}
 (>>>) :: Coroutine r u m a -> Coroutine r m d a -> Coroutine r u d a
-p1 >>> p2 = undefined
+x >>> y = Coroutine $ \k -> apply y (\case
+                                        Done v -> k (Done v)
+                                        Out d y' -> k (Out d (x >>> y'))
+                                        In y' -> apply (pipe2 x y') k
+                                    )
 
 -- It might be useful to define the following function
--- pipe2 :: Coroutine r u m a -> (m -> Coroutine r m d a) -> Coroutine r u d a
-
+pipe2 :: Coroutine r u m a -> (m -> Coroutine r m d a) -> Coroutine r u d a
+pipe2 x y = Coroutine
+            $ \k -> apply x (\case
+                   Done v -> k (Done v)
+                   Out d x' -> apply (x' >>> (y d)) k
+                   In x' -> k (In $ flip pipe2 y . x')
+                            )
 -- Library functions
 
+-- | Repeat routine for ever
+repeatC :: Coroutine r a v () -> Coroutine r a v ()
+repeatC t = t >> repeatC t
+
+-- | nop : No Op
+nop :: Coroutine r a v ()
+nop = return ()
+
+-- | output: Immediately output the argument.
 output :: a -> Coroutine r u a ()
-output v = undefined
+output v = Coroutine $ \k -> k (Out v nop)
 
+-- | input: Waits for an input before returning it.
 input :: Coroutine r v d v
-input = undefined
+input = Coroutine $ \k -> k (In return)
 
+-- | id : Take and return
+idC :: Coroutine r v v ()
+idC = input >>= output
+
+-- | produce: Output each element in a list in order.
 produce :: [a] -> Coroutine r u a ()
-produce xs = undefined
+produce = foldr (\a r -> output a >> r ) nop
 
+-- | consume: Collect all outputted values into a list.
 consume :: Coroutine [t] u t a -> [t]
-consume c = undefined
+consume ts = apply ts
+          (\case
+              Done _ -> []
+              Out t x -> t : consume x
+              In x -> consume $ pipe2 input x
+          )
+
+-- | filter: Repeatedly request for input and output it, if it matches a predicate.
+filterC' :: (v -> Bool) -> Coroutine r v v ()
+filterC' p = input >>= \v -> if (not $ p v) then output v else nop
 
 filterC :: (v -> Bool) -> Coroutine r v v ()
-filterC p = undefined
+filterC = repeatC . filterC'
 
+-- | limit: Allow n items to pass through before terminating (similar to take from the prelude).
 limit :: Int -> Coroutine r v v ()
-limit n = undefined
+limit n | n <= 0 = nop
+        | otherwise = idC >> limit (n-1)
 
+-- | suppress: Disallow the first n items to pass through (similar to drop from the prelude).
 suppress :: Int -> Coroutine r v v ()
-suppress n = undefined
+suppress n | n <= 0 = repeatC idC
+           | otherwise = input >> suppress (n-1)
+
+-- | add: Repeatedly take two inputs and output their sum.
+add' :: Coroutine r Int Int ()
+add' = do
+  n <- input
+  m <- input
+  output (n + m)
 
 add :: Coroutine r Int Int ()
-add = undefined
+add = repeatC add'
+
+-- | duplicate: Repeatedly receive input and output it twice.
+duplicate' :: Coroutine r v v ()
+duplicate' = input >>= \v -> output v >> output v
 
 duplicate :: Coroutine r v v ()
-duplicate = undefined
+duplicate = repeatC duplicate'
+
+-- Notice that add and duplicate should never terminate.
 
 -- Programs
 -- 1. A program which outputs the first 5 even numbers of a stream.
--- 2. A program which produces a stream of the triangle numbers 
+-- 2. A program which produces a stream of the triangle numbers
 -- 3. A program which multiplies a stream by 2
 -- 4. A program which sums adjacent pairs of integers
 
 p1, p2, p3, p4 :: Coroutine r Int Int ()
 
-p1 = undefined
-p2 = undefined
-p3 = undefined
-p4 = undefined
+p1 = filterC even >>> limit 5
+p2 = produce [0 .. ] >>> _
+p3 = input >>= \v -> output (2*v) >> p3
+p4 = duplicate >>> output 0 >>> add
