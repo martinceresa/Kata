@@ -1,8 +1,8 @@
 {-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase    #-}
 module Coroutine where
 
-import Control.Monad (ap, forever)
+import           Control.Monad (ap, forever)
 
 newtype Coroutine r u d a
   = Coroutine { runCoroutine :: (Command r u d a -> r) -> r }
@@ -61,12 +61,12 @@ pipe2 :: Coroutine r u m a -> (m -> Coroutine r m d a) -> Coroutine r u d a
 pipe2 x y = Coroutine
             $ \k -> apply x (\case
                    Done v -> k (Done v)
-                   Out d x' -> apply (x' >>> (y d)) k
+                   Out d x' -> apply (x' >>> y d) k
                    In x' -> k (In $ flip pipe2 y . x')
                             )
 -- Library functions
 
--- | Repeat routine for ever
+-- | Oblivious Repeat routine for ever
 repeatC :: Coroutine r a v () -> Coroutine r a v ()
 repeatC t = t >> repeatC t
 
@@ -101,7 +101,7 @@ consume ts = apply ts
 
 -- | filter: Repeatedly request for input and output it, if it matches a predicate.
 filterC' :: (v -> Bool) -> Coroutine r v v ()
-filterC' p = input >>= \v -> if (not $ p v) then output v else nop
+filterC' p = input >>= \v -> if p v then output v else nop
 
 filterC :: (v -> Bool) -> Coroutine r v v ()
 filterC = repeatC . filterC'
@@ -126,6 +126,12 @@ add' = do
 add :: Coroutine r Int Int ()
 add = repeatC add'
 
+appe :: (a -> b) -> Coroutine r a b ()
+appe f = input >>= output . f
+
+suc :: Coroutine r Int Int ()
+suc = appe succ
+
 -- | duplicate: Repeatedly receive input and output it twice.
 duplicate' :: Coroutine r v v ()
 duplicate' = input >>= \v -> output v >> output v
@@ -134,6 +140,11 @@ duplicate :: Coroutine r v v ()
 duplicate = repeatC duplicate'
 
 -- Notice that add and duplicate should never terminate.
+scanlC' :: (b -> a -> b) -> b -> Coroutine r a b ()
+scanlC' f q = output q >> input >>=  output . f q -- return . f q
+
+scanlC :: (b -> a -> b) -> b -> Coroutine r a b ()
+scanlC f q = repeatC (scanlC' f q)
 
 -- Programs
 -- 1. A program which outputs the first 5 even numbers of a stream.
@@ -144,6 +155,19 @@ duplicate = repeatC duplicate'
 p1, p2, p3, p4 :: Coroutine r Int Int ()
 
 p1 = filterC even >>> limit 5
-p2 = produce [0 .. ] >>> _
-p3 = input >>= \v -> output (2*v) >> p3
-p4 = duplicate >>> output 0 >>> add
+p2'' j m = output m >> p2'' (j + 1) (j + m + 1)
+p2 = p2'' 1 1
+p3 = duplicate >>> add
+-- Better solution, after submission
+p4 = duplicate >>> suppress 1 >>> add
+
+-- || My solution
+-- p1 = filterC even >>> limit 5
+-- p2'' j m = output m >> p2'' (j + 1) (j + m + 1)
+-- p2 = p2'' 1 1
+-- p3 = duplicate >>> add
+-- p4' n = do
+--   m <- input
+--   output (n + m)
+--   p4' m
+-- p4 = input >>= p4'
